@@ -1,0 +1,42 @@
+#!/bin/sh
+command -v git-lfs >/dev/null 2>&1 || { echo >&2 "\nThis repository has been set up with Git LFS but Git LFS is not installed.\n"; exit 0; }
+
+# git is always feeding lines of the following format to stdin of pre-push hook
+# <local ref> SP <local sha1> SP <remote ref> SP <remote sha1> LF
+remote_name=$1 # remote name is passed as first cmd line argument
+while read line; do
+    target_ref=$(echo $line | cut -d ' ' -f 3)
+    target_ref_prefix=$(echo $target_ref | cut -d '/' -f 1-2)
+    # check if we have one of gerrit magic branches prefixes
+    if [ "$target_ref_prefix" == "refs/for" ] || \
+       [ "$target_ref_prefix" == "refs/drafts" ] || \
+       [ "$target_ref_prefix" == "refs/publish" ]; then
+        target_branch_with_topic=$(echo $target_ref | cut -d '/' -f 3-)
+        # clean gerrit extra branch name magic postfixes (everything which follows after %, i.e. %r=add@this.reviewer)
+        target_branch_with_topic=$(echo $target_branch_with_topic | cut -d '%' -f 1)
+        # at this point target_branch_with_topic might look like "master/topic/name", where "topic/name" instructs
+        # gerrit to create a topic branch with that name. Branch itself might look like
+        # "release/public/productname" through, finding branch in "release/public/productname/topic/name":
+        IFS='/'
+        for token in $target_branch_with_topic; do
+            if [ "X$target_branch" == "X" ]; then
+                target_branch="$token"
+            else
+                target_branch="$target_branch/$token"
+            fi
+
+            target_branch_sha=$(git rev-parse "refs/remotes/$remote_name/$target_branch" 2>/dev/null)
+            if [ $? -eq 0 ]; then
+                echo "$(echo $line | cut -d ' ' -f 1-3) $target_branch_sha"
+                break
+            else
+                target_branch_sha=""
+            fi
+        done
+        if [ "X$target_branch_sha" == "X" ]; then # branch was not found, echo original line
+            echo "$line"
+        fi
+    else # not a gerrit prefix, echo original line
+        echo "$line"
+    fi
+done | git lfs pre-push "$@"
